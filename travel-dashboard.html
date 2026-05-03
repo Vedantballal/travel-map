@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+<title>My Travel Map</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1e2631;
+    --border: rgba(255,255,255,0.08);
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #1D9E75;
+    --visited: #1D9E75;
+    --visited-hover: #25c490;
+    --dot: #FAC775;
+    --dot-hover: #EF9F27;
+    --water: #0d1f35;
+    --land: #1e2d3d;
+  }
+
+  html, body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  /* ── HEADER ── */
+  header {
+    padding: 1.1rem 1.25rem 1rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+
+  h1 {
+    font-family: 'DM Serif Display', serif;
+    font-size: clamp(1.3rem, 5vw, 2rem);
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    color: var(--text);
+  }
+
+  header p {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ── STATS ── */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 7px;
+  }
+
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.55rem 0.4rem;
+    text-align: center;
+  }
+
+  .stat-num {
+    font-family: 'DM Serif Display', serif;
+    font-size: clamp(1.1rem, 4vw, 1.75rem);
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .stat-lbl {
+    font-size: clamp(0.52rem, 1.8vw, 0.68rem);
+    color: var(--muted);
+    margin-top: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* ── MAP ── */
+  #map-container {
+    position: relative;
+    background: var(--water);
+    overflow: hidden;
+    cursor: grab;
+    height: 56vw;
+    min-height: 220px;
+    max-height: 480px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #map-container:active { cursor: grabbing; }
+  #map-svg { width: 100%; height: 100%; display: block; }
+
+  .country-path {
+    fill: var(--land);
+    stroke: rgba(255,255,255,0.06);
+    stroke-width: 0.4;
+    transition: fill 0.15s;
+  }
+
+  .country-visited { fill: var(--visited); cursor: pointer; }
+  .country-visited:hover, .country-visited:active { fill: var(--visited-hover); }
+
+  .city-dot {
+    fill: var(--dot);
+    stroke: rgba(0,0,0,0.5);
+    stroke-width: 0.8;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s, fill 0.1s;
+  }
+
+  .city-dot.visible { opacity: 1; pointer-events: all; }
+  .city-dot:hover { fill: var(--dot-hover); }
+
+  .city-label {
+    font-size: 8px;
+    fill: #e6edf3;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+    font-family: 'DM Sans', sans-serif;
+  }
+
+  .city-label.visible { opacity: 1; }
+
+  /* ── ZOOM CONTROLS ── */
+  .zoom-controls {
+    position: absolute;
+    bottom: 0.85rem;
+    left: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    z-index: 10;
+  }
+
+  .zoom-btn, .reset-btn {
+    width: 38px;
+    height: 38px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 1.15rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.12s;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  .reset-btn { font-size: 0.65rem; color: var(--muted); margin-top: 2px; }
+  .zoom-btn:active, .reset-btn:active { background: var(--surface2); }
+
+  .map-hint {
+    position: absolute;
+    top: 0.65rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.55);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 4px 11px;
+    font-size: 0.65rem;
+    color: var(--muted);
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* ── PANEL CARD ── */
+  .panel-card {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 1.1rem 1.25rem;
+    min-height: 90px;
+  }
+
+  .panel-card-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 0.65rem;
+  }
+
+  .panel-placeholder {
+    color: var(--muted);
+    font-size: 0.82rem;
+    line-height: 1.6;
+  }
+
+  .panel-country-name {
+    font-family: 'DM Serif Display', serif;
+    font-size: 1.45rem;
+    font-weight: 400;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+
+  .panel-meta {
+    font-size: 0.73rem;
+    color: var(--muted);
+    margin-bottom: 0.8rem;
+  }
+
+  .cities-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+    margin-bottom: 7px;
+  }
+
+  .city-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  .city-pill {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 5px 13px;
+    font-size: 0.78rem;
+    color: var(--text);
+  }
+
+  /* ── COUNTRY LIST ── */
+  .country-list-header {
+    padding: 0.85rem 1.25rem 0.5rem;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .country-items-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    background: var(--bg);
+  }
+
+  .country-item {
+    padding: 0.6rem 1.25rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    border-left: 2px solid transparent;
+    transition: background 0.1s, color 0.1s;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+
+  .country-item:active { background: var(--surface); color: var(--text); }
+
+  .country-item.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    background: rgba(29,158,117,0.07);
+  }
+
+  .country-cities-count {
+    font-size: 0.68rem;
+    background: var(--surface2);
+    border-radius: 99px;
+    padding: 1px 7px;
+    color: var(--muted);
+    flex-shrink: 0;
+    margin-left: 6px;
+  }
+
+  /* ── LEGEND + FOOTER ── */
+  .legend {
+    display: flex;
+    gap: 1rem;
+    padding: 0.8rem 1.25rem;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+    background: var(--surface);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.7rem;
+    color: var(--muted);
+  }
+
+  .swatch { width: 10px; height: 10px; border-radius: 2px; }
+  .swatch.dot { border-radius: 50%; background: var(--dot); }
+  .swatch.visited { background: var(--visited); }
+  .swatch.unvisited { background: var(--land); }
+
+  footer {
+    padding: 0.7rem 1.25rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.68rem;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px;
+    background: var(--bg);
+  }
+
+  /* ── DESKTOP overrides ── */
+  @media (min-width: 720px) {
+    header {
+      flex-direction: row;
+      align-items: flex-end;
+      padding: 1.5rem 2rem 1.25rem;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    header > div:first-child { flex: 1; }
+
+    .stats {
+      grid-template-columns: repeat(4, auto);
+      gap: 0.85rem;
+    }
+
+    .stat { padding: 0.7rem 1.1rem; }
+
+    #map-container {
+      height: 52vw;
+      max-height: 560px;
+    }
+
+    .panel-card { padding: 1.25rem 2rem; }
+    .country-list-header { padding: 0.85rem 2rem 0.5rem; }
+    .country-items-grid { grid-template-columns: repeat(3, 1fr); }
+    .country-item { padding: 0.6rem 2rem; }
+    .legend { padding: 0.85rem 2rem; }
+    footer { padding: 0.75rem 2rem; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>My Travel Map</h1>
+    <p>Places I've explored around the world</p>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="stat-num">23</div><div class="stat-lbl">Countries</div></div>
+    <div class="stat"><div class="stat-num">51</div><div class="stat-lbl">Cities</div></div>
+    <div class="stat"><div class="stat-num">2</div><div class="stat-lbl">Continents</div></div>
+    <div class="stat"><div class="stat-num">11.5%</div><div class="stat-lbl">World explored</div></div>
+  </div>
+</header>
+
+<div id="map-container">
+  <div class="map-hint">Pinch to zoom · Drag to pan · Tap a country</div>
+  <svg id="map-svg"></svg>
+  <div class="zoom-controls">
+    <button class="zoom-btn" id="zoom-in">+</button>
+    <button class="zoom-btn" id="zoom-out">−</button>
+    <button class="reset-btn" id="zoom-reset">⊡</button>
+  </div>
+</div>
+
+<div class="panel-card">
+  <div class="panel-card-label">Selected destination</div>
+  <div id="country-panel">
+    <p class="panel-placeholder">Tap any green country on the map to explore your visits.</p>
+  </div>
+</div>
+
+<div class="country-list-header">All countries visited</div>
+<div class="country-items-grid" id="country-list-items"></div>
+
+<div class="legend">
+  <div class="legend-item"><div class="swatch visited"></div> Visited</div>
+  <div class="legend-item"><div class="swatch dot"></div> City (tap country)</div>
+  <div class="legend-item"><div class="swatch unvisited"></div> Not visited</div>
+</div>
+
+<footer>
+  <span>Pinch/scroll to zoom · Drag to pan</span>
+  <span>Data last updated 2024</span>
+</footer>
+
+<script>
+const travelData = {
+  "UK":          { cities: ["London"], continent: "Europe" },
+  "Norway":      { cities: ["Trondheim","Oslo","Bergen","Tromsø","Lofoten"], continent: "Europe" },
+  "Sweden":      { cities: ["Gothenburg"], continent: "Europe" },
+  "Denmark":     { cities: ["Copenhagen"], continent: "Europe" },
+  "Finland":     { cities: ["Helsinki"], continent: "Europe" },
+  "Estonia":     { cities: ["Tallinn"], continent: "Europe" },
+  "Poland":      { cities: ["Warsaw","Kraków","Gdańsk"], continent: "Europe" },
+  "Czechia":     { cities: ["Prague"], continent: "Europe" },
+  "Austria":     { cities: ["Vienna"], continent: "Europe" },
+  "Hungary":     { cities: ["Budapest"], continent: "Europe" },
+  "Slovakia":    { cities: ["Bratislava"], continent: "Europe" },
+  "Germany":     { cities: ["Berlin","Nuremberg","Munich"], continent: "Europe" },
+  "Italy":       { cities: ["Milan","Rome","Venice","Bologna","Florence","La Spezia","Naples","Bari","Lanciano"], continent: "Europe" },
+  "Switzerland": { cities: ["Zurich","Lucerne","Zermatt"], continent: "Europe" },
+  "Belgium":     { cities: ["Brussels","Ghent","Bruges"], continent: "Europe" },
+  "Netherlands": { cities: ["Amsterdam","Utrecht","Nijmegen"], continent: "Europe" },
+  "Turkey":      { cities: ["Istanbul","Kusadasi","Kayseri"], continent: "Asia" },
+  "Singapore":   { cities: ["Singapore City"], continent: "Asia" },
+  "Malaysia":    { cities: ["Kuala Lumpur"], continent: "Asia" },
+  "Portugal":    { cities: ["Lisbon","Porto"], continent: "Europe" },
+  "Vatican City":{ cities: ["Vatican City"], continent: "Europe" },
+  "India":       { cities: ["Nagpur"], continent: "Asia" },
+  "Spain":       { cities: ["Barcelona"], continent: "Europe" }
+};
+
+const nameMap = {
+  "United Kingdom": "UK", "Turkey": "Turkey", "Türkiye": "Turkey",
+  "Czech Republic": "Czechia", "Czechia": "Czechia", "Vatican": "Vatican City",
+};
+
+const cityCoords = {
+  "London": [-0.09,51.505], "Trondheim": [10.39,63.43], "Oslo": [10.74,59.91],
+  "Bergen": [5.32,60.39], "Tromsø": [18.95,69.65], "Lofoten": [13.98,68.15],
+  "Gothenburg": [11.97,57.71], "Copenhagen": [12.57,55.68], "Helsinki": [24.94,60.17],
+  "Tallinn": [24.75,59.44], "Warsaw": [21.01,52.23], "Kraków": [19.94,50.06],
+  "Gdańsk": [18.65,54.35], "Prague": [14.43,50.08], "Vienna": [16.37,48.21],
+  "Budapest": [19.04,47.50], "Bratislava": [17.11,48.15], "Berlin": [13.40,52.52],
+  "Nuremberg": [11.07,49.45], "Munich": [11.58,48.14], "Milan": [9.19,45.46],
+  "Rome": [12.50,41.90], "Venice": [12.34,45.44], "Bologna": [11.34,44.49],
+  "Florence": [11.26,43.77], "La Spezia": [9.82,44.11], "Naples": [14.27,40.85],
+  "Bari": [16.87,41.12], "Lanciano": [14.38,42.22], "Zurich": [8.54,47.38],
+  "Lucerne": [8.31,47.05], "Zermatt": [7.75,46.02], "Brussels": [4.35,50.85],
+  "Ghent": [3.72,51.05], "Bruges": [3.22,51.21], "Amsterdam": [4.89,52.37],
+  "Utrecht": [5.12,52.09], "Nijmegen": [5.87,51.85], "Istanbul": [28.96,41.01],
+  "Kusadasi": [27.26,37.86], "Kayseri": [35.49,38.73], "Singapore City": [103.85,1.29],
+  "Kuala Lumpur": [101.69,3.14], "Lisbon": [-9.14,38.72], "Porto": [-8.61,41.15],
+  "Vatican City": [12.45,41.90], "Nagpur": [79.09,21.15], "Barcelona": [2.15,41.39]
+};
+
+let svg, g, zoom, projection, path;
+
+function showCitiesForCountry(country) {
+  d3.selectAll('.city-dot').classed('visible', function() {
+    return this.getAttribute('data-country') === country;
+  });
+  d3.selectAll('.city-label').classed('visible', function() {
+    return this.getAttribute('data-country') === country;
+  });
+}
+
+function showPanel(country) {
+  const d = travelData[country];
+  if (!d) return;
+
+  document.querySelectorAll('.country-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.country === country)
+  );
+
+  showCitiesForCountry(country);
+
+  document.getElementById('country-panel').innerHTML = `
+    <div class="panel-country-name">${country}</div>
+    <div class="panel-meta">${d.continent} · ${d.cities.length} ${d.cities.length === 1 ? 'city' : 'cities'}</div>
+    <div class="cities-label">Cities visited</div>
+    <div class="city-pills">${d.cities.map(c => `<span class="city-pill">${c}</span>`).join('')}</div>
+  `;
+
+  // Smooth scroll to panel on mobile after a short delay
+  if (window.innerWidth < 720) {
+    setTimeout(() => {
+      document.querySelector('.panel-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  }
+}
+
+function buildCountryList() {
+  const container = document.getElementById('country-list-items');
+  Object.entries(travelData).sort((a,b) => a[0].localeCompare(b[0])).forEach(([name, data]) => {
+    const el = document.createElement('div');
+    el.className = 'country-item';
+    el.dataset.country = name;
+    el.innerHTML = `<span>${name}</span><span class="country-cities-count">${data.cities.length}</span>`;
+    el.addEventListener('click', () => showPanel(name));
+    container.appendChild(el);
+  });
+}
+
+async function init() {
+  buildCountryList();
+
+  const container = document.getElementById('map-container');
+  const w = container.clientWidth || 375;
+  const h = container.clientHeight || 220;
+
+  svg = d3.select('#map-svg').attr('width', w).attr('height', h);
+
+  projection = d3.geoNaturalEarth1().scale(w / 6.3).translate([w / 2, h / 2]);
+  path = d3.geoPath().projection(projection);
+  g = svg.append('g');
+
+  zoom = d3.zoom()
+    .scaleExtent([1, 12])
+    .on('zoom', event => {
+      const k = event.transform.k;
+      g.attr('transform', event.transform);
+      g.selectAll('.city-dot').attr('r', 4 / k);
+      g.selectAll('.city-label').attr('font-size', 8 / k);
+    });
+
+  svg.call(zoom);
+
+  const world = await d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json');
+  const countries = topojson.feature(world, world.objects.countries);
+
+  g.selectAll('.country-path')
+    .data(countries.features)
+    .enter().append('path')
+    .attr('class', d => {
+      const key = nameMap[d.properties.name] || d.properties.name;
+      return travelData[key] ? 'country-path country-visited' : 'country-path';
+    })
+    .attr('d', path)
+    .on('click', function(event, d) {
+      const key = nameMap[d.properties.name] || d.properties.name;
+      if (travelData[key]) showPanel(key);
+    })
+    .append('title').text(d => {
+      const key = nameMap[d.properties.name] || d.properties.name;
+      return travelData[key] ? key : d.properties.name;
+    });
+
+  Object.entries(cityCoords).forEach(([city, [lon, lat]]) => {
+    const [x, y] = projection([lon, lat]);
+    if (!x || !y) return;
+    const country = Object.keys(travelData).find(c => travelData[c].cities.includes(city));
+
+    g.append('circle')
+      .attr('class', 'city-dot').attr('cx', x).attr('cy', y).attr('r', 4)
+      .attr('data-city', city).attr('data-country', country || '')
+      .on('click', () => { if (country) showPanel(country); })
+      .append('title').text(city);
+
+    g.append('text')
+      .attr('class', 'city-label').attr('x', x + 5).attr('y', y + 3)
+      .attr('data-city', city).text(city);
+  });
+
+  document.getElementById('zoom-in').addEventListener('click', () =>
+    svg.transition().duration(300).call(zoom.scaleBy, 1.5));
+  document.getElementById('zoom-out').addEventListener('click', () =>
+    svg.transition().duration(300).call(zoom.scaleBy, 1 / 1.5));
+  document.getElementById('zoom-reset').addEventListener('click', () =>
+    svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity));
+
+  window.addEventListener('resize', () => {
+    const nw = container.clientWidth;
+    const nh = container.clientHeight;
+    svg.attr('width', nw).attr('height', nh);
+    projection.scale(nw / 6.3).translate([nw / 2, nh / 2]);
+    path = d3.geoPath().projection(projection);
+    g.selectAll('.country-path').attr('d', path);
+    g.selectAll('.city-dot').each(function() {
+      const [lon, lat] = cityCoords[this.getAttribute('data-city')];
+      const [cx, cy] = projection([lon, lat]);
+      d3.select(this).attr('cx', cx).attr('cy', cy);
+    });
+    g.selectAll('.city-label').each(function() {
+      const [lon, lat] = cityCoords[this.getAttribute('data-city')];
+      const [cx, cy] = projection([lon, lat]);
+      d3.select(this).attr('x', cx + 5).attr('y', cy + 3);
+    });
+  });
+}
+
+init();
+</script>
+</body>
+</html>
